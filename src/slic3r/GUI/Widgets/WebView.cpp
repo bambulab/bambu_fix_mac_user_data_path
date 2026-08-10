@@ -10,11 +10,8 @@
 #include <wx/utils.h>
 #include <wx/dir.h>
 #include <wx/file.h>
+#include <wx/filefn.h>
 #include <wx/stdpaths.h>
-#ifdef __WXOSX__
-#include <fcntl.h>
-#include <unistd.h>
-#endif
 #if wxUSE_WEBVIEW_EDGE
 #include <wx/msw/webview_edge.h>
 #elif defined(__WXMAC__)
@@ -289,9 +286,14 @@ wxString WebView::BuildWebViewUserDataPath()
 
         wxString bambu_lock_file = bambu_dir + path_sep + BAMBU_LOCK_FILE_NAME;
 
-#ifdef __WIN32__
         static wxFile lockFile;
-        if (lockFile.Exists(bambu_lock_file)) { DeleteFileW(bambu_lock_file.wc_str()); }/*try delete previous file so that we could lock it by wxFile::write_excl*/
+        if (lockFile.Exists(bambu_lock_file)) {
+#ifdef __WIN32__
+            DeleteFileW(bambu_lock_file.wc_str());
+#else
+            wxRemoveFile(bambu_lock_file);
+#endif
+        }/*try delete previous file so that we could lock it by wxFile::write_excl*/
 
         wxLogNull suppress_log;
         if (lockFile.Open(bambu_lock_file, wxFile::write_excl)) {
@@ -300,26 +302,6 @@ wxString WebView::BuildWebViewUserDataPath()
         }
 
         if (!lockFile.Exists(bambu_lock_file)) { break; } /*maybe don't have access rights to create file, break*/
-#else
-        static wxFile lockFile;
-        const std::string lock_path = bambu_lock_file.utf8_string();
-        const int fd = open(lock_path.c_str(), O_WRONLY | O_CREAT, 0666);
-        if (fd == -1)
-            break;
-
-        struct flock lock = {};
-        lock.l_type = F_WRLCK;
-        lock.l_whence = SEEK_SET;
-        lock.l_start = 0;
-        lock.l_len = 1;
-        if (fcntl(fd, F_SETLK, &lock) != -1) {
-            // Keep the descriptor open so the advisory lock remains held.
-            lockFile.Attach(fd);
-            data_dir = bambu_dir;
-            break;
-        }
-        close(fd);
-#endif
     }
 
     return data_dir;
@@ -331,13 +313,16 @@ wxString WebView::BuildWebViewUserDataPath()
 
 #ifdef __WXOSX__
 namespace {
+// Studio pages served from the local bundle (file://, wxfs://, memory://).
+// PrinterWebView / DeviceWebHost create the view with an empty url and load a
+// local file later, so match them by name as well.
 bool IsStudioLocalWebPage(const wxString &url, const wxString &name)
 {
     wxString u = url;
     u.MakeLower();
     if (u.StartsWith("file:") || u.StartsWith("wxfs:") || u.StartsWith("memory:"))
         return true;
-    return url.empty() && name == "DevicePage";
+    return url.empty() && name == "DeivcePage";
 }
 } // namespace
 #endif
@@ -373,8 +358,10 @@ wxWebView* WebView::CreateWebView(wxWindow * parent, wxString const & url, wxStr
     webView->SetUserDataPathOption(BuildWebViewUserDataPath());
 #elif defined(__WXOSX__)
     wxWebView *webView = new WebViewWebKit;
-    // Must run before Create(): WKWebViewConfiguration.websiteDataStore is
-    // fixed at initialization time.
+    // Only local Studio pages get an isolated WKWebsiteDataStore, so a second
+    // instance no longer fails to load them while the first one holds the
+    // default store. Remote pages keep the default store to preserve login.
+    // Must run before Create(): the data store is fixed at configuration time.
     if (IsStudioLocalWebPage(url2, name))
         webView->SetUserDataPathOption(BuildWebViewUserDataPath());
 #else
