@@ -6,7 +6,7 @@
 class WebView
 {
 public:
-    static wxWebView *CreateWebView(wxWindow *parent, wxString const &url);
+    static wxWebView *CreateWebView(wxWindow *parent, wxString const &url, wxString const &name = wxEmptyString);
     
     static void LoadUrl(wxWebView * webView, wxString const &url);
 
@@ -18,8 +18,10 @@ public:
     // Windows: WebView2 CookieManager; macOS: WKHTTPCookieStore (default data store).
     static void ClearBambulabTokenCookies();
 
-    /*Find a user data path*/
-    static wxString BuildEdgeUserDataPath();
+    /* Find a per-process WebView user data path.
+     * Windows: WebView2 user data folder.
+     * macOS: lock dir whose slot id maps to a WKWebsiteDataStore (via wx fork). */
+    static wxString BuildWebViewUserDataPath();
 };
 
 #endif // !slic3r_GUI_WebView_hpp_

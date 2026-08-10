@@ -8,6 +8,13 @@
 #include <wx/webviewfshandler.h>
 #include <wx/dynlib.h>
 #include <wx/utils.h>
+#include <wx/dir.h>
+#include <wx/file.h>
+#include <wx/stdpaths.h>
+#ifdef __WXOSX__
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 #if wxUSE_WEBVIEW_EDGE
 #include <wx/msw/webview_edge.h>
 #elif defined(__WXMAC__)
@@ -260,22 +267,29 @@ public:
 };
 
 #define BAMBU_LOCK_FILE_NAME "bambu_lockfile"
-wxString WebView::BuildEdgeUserDataPath()
+wxString WebView::BuildWebViewUserDataPath()
 {
-#ifdef __WIN32__
+#if defined(__WIN32__) || defined(__WXOSX__)
     static wxString data_dir;
     if (!data_dir.empty()) { return data_dir; }
 
     data_dir = wxStandardPaths::Get().GetUserLocalDataDir();
+#ifdef __WIN32__
     data_dir.append("\\WebView2Cache\\");
+    const wxString path_sep = "\\";
+#else
+    data_dir.append("/WebViewCache/");
+    const wxString path_sep = "/";
+#endif
 
     // find a path
     for (int bambu_id = 0; bambu_id < std::numeric_limits<int>::max(); bambu_id++) {
         wxString bambu_dir = data_dir + wxString::Format("%d", bambu_id);
         if (!wxDir::Exists(bambu_dir) && !wxDir::Make(bambu_dir, 511, wxPATH_MKDIR_FULL)) { break; } /*maybe don't have access rights to create dir, break*/
 
-        wxString bambu_lock_file = bambu_dir + "\\" BAMBU_LOCK_FILE_NAME;
+        wxString bambu_lock_file = bambu_dir + path_sep + BAMBU_LOCK_FILE_NAME;
 
+#ifdef __WIN32__
         static wxFile lockFile;
         if (lockFile.Exists(bambu_lock_file)) { DeleteFileW(bambu_lock_file.wc_str()); }/*try delete previous file so that we could lock it by wxFile::write_excl*/
 
@@ -286,6 +300,26 @@ wxString WebView::BuildEdgeUserDataPath()
         }
 
         if (!lockFile.Exists(bambu_lock_file)) { break; } /*maybe don't have access rights to create file, break*/
+#else
+        static wxFile lockFile;
+        const std::string lock_path = bambu_lock_file.utf8_string();
+        const int fd = open(lock_path.c_str(), O_WRONLY | O_CREAT, 0666);
+        if (fd == -1)
+            break;
+
+        struct flock lock = {};
+        lock.l_type = F_WRLCK;
+        lock.l_whence = SEEK_SET;
+        lock.l_start = 0;
+        lock.l_len = 1;
+        if (fcntl(fd, F_SETLK, &lock) != -1) {
+            // Keep the descriptor open so the advisory lock remains held.
+            lockFile.Attach(fd);
+            data_dir = bambu_dir;
+            break;
+        }
+        close(fd);
+#endif
     }
 
     return data_dir;
@@ -295,7 +329,20 @@ wxString WebView::BuildEdgeUserDataPath()
 #endif
 }
 
-wxWebView* WebView::CreateWebView(wxWindow * parent, wxString const & url)
+#ifdef __WXOSX__
+namespace {
+bool IsStudioLocalWebPage(const wxString &url, const wxString &name)
+{
+    wxString u = url;
+    u.MakeLower();
+    if (u.StartsWith("file:") || u.StartsWith("wxfs:") || u.StartsWith("memory:"))
+        return true;
+    return url.empty() && name == "DevicePage";
+}
+} // namespace
+#endif
+
+wxWebView* WebView::CreateWebView(wxWindow * parent, wxString const & url, wxString const & name)
 {
 #if wxUSE_WEBVIEW_EDGE
     // Check if a fixed version of edge is present in
@@ -323,9 +370,13 @@ wxWebView* WebView::CreateWebView(wxWindow * parent, wxString const & url)
     enable_default_webview2_cdp_for_internal_builds();
 
     wxWebView* webView = new WebViewEdge;
-    webView->SetUserDataPathOption(BuildEdgeUserDataPath());
+    webView->SetUserDataPathOption(BuildWebViewUserDataPath());
 #elif defined(__WXOSX__)
     wxWebView *webView = new WebViewWebKit;
+    // Must run before Create(): WKWebViewConfiguration.websiteDataStore is
+    // fixed at initialization time.
+    if (IsStudioLocalWebPage(url2, name))
+        webView->SetUserDataPathOption(BuildWebViewUserDataPath());
 #else
     auto webView = wxWebView::New();
 #endif

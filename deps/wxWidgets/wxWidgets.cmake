@@ -23,9 +23,17 @@ endif ()
 #     set(_patch_cmd test -f WXWIDGETS_PATCHED || ${PATCH_CMD} ${CMAKE_CURRENT_LIST_DIR}/0001-wxWidget-fix.patch && touch WXWIDGETS_PATCHED)
 # endif ()
 
+if (APPLE)
+    set(_wx_repository "https://github.com/XinZhangBambu/wxWidgets_xinzhang")
+    set(_wx_tag 947a47d82390a605a16e059e74f065cb50ef6ccf)
+else ()
+    set(_wx_repository "https://github.com/bambulab/wxWidgets")
+    set(_wx_tag master)
+endif ()
+
 bambustudio_add_cmake_project(wxWidgets
-    GIT_REPOSITORY "https://github.com/bambulab/wxWidgets"
-    GIT_TAG master
+    GIT_REPOSITORY "${_wx_repository}"
+    GIT_TAG ${_wx_tag}
     DEPENDS ${PNG_PKG} ${ZLIB_PKG} ${EXPAT_PKG} ${TIFF_PKG} ${JPEG_PKG}
     CMAKE_ARGS
         -DCMAKE_POLICY_VERSION_MINIMUM=3.5
